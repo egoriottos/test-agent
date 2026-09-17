@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# pre-commit хук: на каждый закоммиченный .java-файл под src/main/java
+# достаёт список публичных методов и просит test-agent сгенерировать/актуализировать
+# тест на каждый из них. Сгенерированный/изменённый тестовый файл дозаписывается в
+# ТОТ ЖЕ коммит (git add). Диффом "что реально изменилось" не занимаемся — просто
+# просим агента по каждому методу, а решение ADD/UPDATE/NO_CHANGE он принимает сам.
+set -euo pipefail
+
+AGENT_URL="${TEST_AGENT_URL:-http://localhost:8081}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# На Windows обычно есть только `python`, на Linux/macOS — `python3`.
+PYTHON_BIN="$(command -v python3 || command -v python || true)"
+if [ -z "$PYTHON_BIN" ]; then
+    echo "test-agent: не нашёл ни python3, ни python в PATH — пропускаю автогенерацию тестов" >&2
+    exit 0
+fi
+
+# Если агент не поднят — не блокируем коммит, просто предупреждаем и выходим.
+if ! curl -sf -o /dev/null --max-time 2 "$AGENT_URL/generate-test" -X OPTIONS 2>/dev/null \
+   && ! curl -sf -o /dev/null --max-time 2 "$AGENT_URL" 2>/dev/null; then
+    echo "test-agent: сервис недоступен на $AGENT_URL — пропускаю автогенерацию тестов" >&2
+    exit 0
+fi
+
+CHANGED_FILES=$(git diff --cached --name-only --diff-filter=ACM -- '*.java' | grep '/src/main/java/' || true)
+
+if [ -z "$CHANGED_FILES" ]; then
+    exit 0
+fi
+
+echo "test-agent: проверяю изменённые классы на покрытие тестами..."
+
+while IFS= read -r FILE; do
+    [ -z "$FILE" ] && continue
+    echo "  файл: $FILE"
+
+    METHODS=$("$PYTHON_BIN" "$SCRIPT_DIR/extract_public_methods.py" "$FILE" || true)
+    if [ -z "$METHODS" ]; then
+        continue
+    fi
+
+    while IFS= read -r METHOD; do
+        [ -z "$METHOD" ] && continue
+
+        PAYLOAD=$("$PYTHON_BIN" -c "import json,sys; print(json.dumps({'sourceFilePath': sys.argv[1], 'methodName': sys.argv[2]}))" "$FILE" "$METHOD")
+
+        RESPONSE=$(curl -sf -X POST "$AGENT_URL/generate-test" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD") || {
+                echo "    $METHOD: ошибка вызова агента, пропускаю" >&2
+                continue
+            }
+
+        ACTION=$("$PYTHON_BIN" -c "import json,sys; print(json.load(sys.stdin).get('action','?'))" <<< "$RESPONSE")
+        TEST_PATH=$("$PYTHON_BIN" -c "import json,sys; print(json.load(sys.stdin).get('testFilePath',''))" <<< "$RESPONSE")
+
+        echo "    $METHOD -> $ACTION"
+
+        if [ "$ACTION" != "NO_CHANGE" ] && [ -n "$TEST_PATH" ] && [ -f "$TEST_PATH" ]; then
+            git add "$TEST_PATH"
+            echo "    добавил в коммит: $TEST_PATH"
+        fi
+    done <<< "$METHODS"
+done <<< "$CHANGED_FILES"
+
+exit 0

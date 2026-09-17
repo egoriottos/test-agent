@@ -1,0 +1,58 @@
+### 1. NO_CHANGE — тест уже корректный, менять нечего
+POST http://localhost:8081/generate-test
+Content-Type: application/json
+
+{
+  "sourceFilePath": "demo-project/src/main/java/ru/bublikov/demo/OrderService.java",
+  "methodName": "calculateTotal"
+}
+
+### 2. UPDATE_TEST_METHOD — тест есть, но устарел (скидка 10% -> 15%)
+POST http://localhost:8081/generate-test
+Content-Type: application/json
+
+{
+  "sourceFilePath": "demo-project/src/main/java/ru/bublikov/demo/OrderService.java",
+  "methodName": "applyDiscount"
+}
+
+### 3. ADD_TEST_METHOD — метод без зависимостей, теста ещё нет
+POST http://localhost:8081/generate-test
+Content-Type: application/json
+
+{
+  "sourceFilePath": "demo-project/src/main/java/ru/bublikov/demo/OrderService.java",
+  "methodName": "cancelOrder"
+}
+
+### 4. ADD_TEST_METHOD + read_class_source — методу нужен мок OrderRepository,
+### агент сам должен запросить её исходник, чтобы понять сигнатуру findAmount
+POST http://localhost:8081/generate-test
+Content-Type: application/json
+
+{
+  "sourceFilePath": "demo-project/src/main/java/ru/bublikov/demo/OrderService.java",
+  "methodName": "refundOrder"
+}
+
+### 5. CREATE_TEST_CLASS + read_class_source (2 хопа) — тестового класса на
+### OrderController вообще нет; чтобы замокать OrderService, агент должен сначала
+### подтянуть его исходник (а через него, при желании, ещё и OrderRepository),
+### и в идеале подсмотреть стиль в соседнем OrderServiceTest.java
+POST http://localhost:8081/generate-test
+Content-Type: application/json
+
+{
+  "sourceFilePath": "demo-project/src/main/java/ru/bublikov/demo/OrderController.java",
+  "methodName": "getRefundAmount"
+}
+
+### 6. CREATE_TEST_CLASS без зависимостей — контраст с (5): здесь read_class_source
+### агенту скорее всего не понадобится вообще
+POST http://localhost:8081/generate-test
+Content-Type: application/json
+
+{
+  "sourceFilePath": "demo-project/src/main/java/ru/bublikov/demo/PaymentService.java",
+  "methodName": "processPayment"
+}
